@@ -2,6 +2,9 @@ from gh_linker.bot import bot
 
 from dotenv import load_dotenv
 import os
+import logging
+
+logging.basicConfig(level=logging.INFO)
 
 load_dotenv()
 
