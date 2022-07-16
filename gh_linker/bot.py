@@ -1,12 +1,18 @@
 from contextlib import suppress
+from aiohttp import ClientSession
 from discord.ext import commands
 from discord.ext.commands import Cog
 from discord import Forbidden, Thread
+
 
 class Bot(commands.Bot):
     """
     Base bot instance.
     """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.http_session = ClientSession()
 
     @Cog.listener()
     async def on_thread_join(self, thread: Thread) -> None:

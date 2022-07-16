@@ -25,7 +25,7 @@
 
 
 import logging
-import random
+import os
 import re
 import typing as t
 from dataclasses import dataclass
@@ -36,29 +36,26 @@ import discord
 from aiohttp import ClientResponse
 from discord.ext import commands
 
-from bot.bot import Bot
-from bot.constants import Colours, ERROR_REPLIES, Emojis, NEGATIVE_REPLIES, Tokens
-from bot.exts.core.extensions import invoke_help_command
+from gh_linker.bot import Bot
+from gh_linker.utils import Colours, Emojis, invoke_help_command
 
 log = logging.getLogger(__name__)
 
 GITHUB_API_URL = "https://api.github.com"
 
-REQUEST_HEADERS = {
-    "Accept": "application/vnd.github.v3+json"
-}
+REQUEST_HEADERS = {"Accept": "application/vnd.github.v3+json"}
 
 REPOSITORY_ENDPOINT = "https://api.github.com/orgs/{org}/repos?per_page=100&type=public"
 ISSUE_ENDPOINT = "https://api.github.com/repos/{user}/{repository}/issues/{number}"
 PR_ENDPOINT = "https://api.github.com/repos/{user}/{repository}/pulls/{number}"
 
-if Tokens.github:
-    REQUEST_HEADERS["Authorization"] = f"token {Tokens.github}"
+github_token = os.getenv("GITHUB_TOKEN")
+if github_token:
+    REQUEST_HEADERS["Authorization"] = f"token {github_token}"
 
 CODE_BLOCK_RE = re.compile(
-    r"^`([^`\n]+)`"   # Inline codeblock
-    r"|```(.+?)```",  # Multiline codeblock
-    re.DOTALL | re.MULTILINE
+    r"^`([^`\n]+)`" r"|```(.+?)```",  # Inline codeblock  # Multiline codeblock
+    re.DOTALL | re.MULTILINE,
 )
 
 # Maximum number of issues in one message
@@ -112,10 +109,7 @@ class GithubInfo(commands.Cog):
         return CODE_BLOCK_RE.sub("", message)
 
     async def fetch_issue(
-        self,
-        number: int,
-        repository: str,
-        user: str
+        self, number: int, repository: str, user: str
     ) -> t.Union[IssueState, FetchError]:
         """
         Retrieve an issue from a GitHub repository.
@@ -129,7 +123,9 @@ class GithubInfo(commands.Cog):
         if r.status == 403:
             if r.headers.get("X-RateLimit-Remaining") == "0":
                 log.info(f"Ratelimit reached while fetching {url}")
-                return FetchError(403, "Ratelimit reached, please retry in a few minutes.")
+                return FetchError(
+                    403, "Ratelimit reached, please retry in a few minutes."
+                )
             return FetchError(403, "Cannot access issue.")
         elif r.status in (404, 410):
             return FetchError(r.status, "Issue not found.")
@@ -163,24 +159,25 @@ class GithubInfo(commands.Cog):
 
         issue_url = json_data.get("html_url")
 
-        return IssueState(repository, number, issue_url, json_data.get("title", ""), emoji)
+        return IssueState(
+            repository, number, issue_url, json_data.get("title", ""), emoji
+        )
 
     @staticmethod
-    def format_embed(
-        results: t.List[t.Union[IssueState, FetchError]]
-    ) -> discord.Embed:
+    def format_embed(results: t.List[t.Union[IssueState, FetchError]]) -> discord.Embed:
         """Take a list of IssueState or FetchError and format a Discord embed for them."""
         description_list = []
 
         for result in results:
             if isinstance(result, IssueState):
-                description_list.append(f"{result.emoji} [{result.title}]({result.url})")
+                description_list.append(
+                    f"{result.emoji} [{result.title}]({result.url})"
+                )
             elif isinstance(result, FetchError):
                 description_list.append(f":x: [{result.return_code}] {result.message}")
 
         resp = discord.Embed(
-            colour=Colours.bright_green,
-            description="\n".join(description_list)
+            colour=Colours.bright_green, description="\n".join(description_list)
         )
 
         resp.set_author(name="GitHub")
@@ -205,7 +202,9 @@ class GithubInfo(commands.Cog):
 
         issues = [
             FoundIssue(*match.group("org", "repo", "number"))
-            for match in AUTOMATIC_REGEX.finditer(self.remove_codeblocks(message.content))
+            for match in AUTOMATIC_REGEX.finditer(
+                self.remove_codeblocks(message.content)
+            )
         ]
         links = []
 
@@ -214,15 +213,14 @@ class GithubInfo(commands.Cog):
             if not message.guild:
                 return
 
-            log.trace(f"Found {issues = }")
             # Remove duplicates
             issues = set(issues)
 
             if len(issues) > MAXIMUM_ISSUES:
                 embed = discord.Embed(
-                    title=random.choice(ERROR_REPLIES),
+                    title="Error",
                     color=Colours.soft_red,
-                    description=f"Too many issues/PRs! (maximum of {MAXIMUM_ISSUES})"
+                    description=f"Too many issues/PRs! (maximum of {MAXIMUM_ISSUES})",
                 )
                 await message.channel.send(embed=embed, delete_after=5)
                 return
@@ -231,7 +229,7 @@ class GithubInfo(commands.Cog):
                 result = await self.fetch_issue(
                     int(repo_issue.number),
                     repo_issue.repository,
-                    repo_issue.organisation or "python-discord"
+                    repo_issue.organisation or "python-discord",
                 )
                 if isinstance(result, IssueState):
                     links.append(result)
@@ -242,9 +240,9 @@ class GithubInfo(commands.Cog):
         resp = self.format_embed(links)
         await message.channel.send(embed=resp)
 
-    async def fetch_data(self, url: str) -> tuple[dict[str], ClientResponse]:
+    async def fetch_data(self, url: str) -> tuple[dict[str, t.Any], ClientResponse]:
         """Retrieve data as a dictionary and the response in a tuple."""
-        log.trace(f"Querying GH issues API: {url}")
+        log.debug(f"Querying GH issues API: {url}")
         async with self.bot.http_session.get(url, headers=REQUEST_HEADERS) as r:
             return await r.json(), r
 
@@ -257,16 +255,19 @@ class GithubInfo(commands.Cog):
             # User_data will not have a message key if the user exists
             if "message" in user_data:
                 embed = discord.Embed(
-                    title=random.choice(NEGATIVE_REPLIES),
+                    title="That didn't work!",
                     description=f"The profile for `{username}` was not found.",
-                    colour=Colours.soft_red
+                    colour=Colours.soft_red,
                 )
 
                 await ctx.send(embed=embed)
                 return
 
             org_data, _ = await self.fetch_data(user_data["organizations_url"])
-            orgs = [f"[{org['login']}](https://github.com/{org['login']})" for org in org_data]
+            orgs = [
+                f"[{org['login']}](https://github.com/{org['login']})"
+                for org in org_data
+            ]
             orgs_to_add = " | ".join(orgs)
 
             gists = user_data["public_gists"]
@@ -281,10 +282,14 @@ class GithubInfo(commands.Cog):
 
             embed = discord.Embed(
                 title=f"`{user_data['login']}`'s GitHub profile info",
-                description=f"```\n{user_data['bio']}\n```\n" if user_data["bio"] else "",
+                description=f"```\n{user_data['bio']}\n```\n"
+                if user_data["bio"]
+                else "",
                 colour=discord.Colour.og_blurple(),
                 url=user_data["html_url"],
-                timestamp=datetime.strptime(user_data["created_at"], "%Y-%m-%dT%H:%M:%SZ")
+                timestamp=datetime.strptime(
+                    user_data["created_at"], "%Y-%m-%dT%H:%M:%SZ"
+                ),
             )
             embed.set_thumbnail(url=user_data["avatar_url"])
             embed.set_footer(text="Account created at")
@@ -293,30 +298,35 @@ class GithubInfo(commands.Cog):
 
                 embed.add_field(
                     name="Followers",
-                    value=f"[{user_data['followers']}]({user_data['html_url']}?tab=followers)"
+                    value=f"[{user_data['followers']}]({user_data['html_url']}?tab=followers)",
                 )
                 embed.add_field(
                     name="Following",
-                    value=f"[{user_data['following']}]({user_data['html_url']}?tab=following)"
+                    value=f"[{user_data['following']}]({user_data['html_url']}?tab=following)",
                 )
 
             embed.add_field(
                 name="Public repos",
-                value=f"[{user_data['public_repos']}]({user_data['html_url']}?tab=repositories)"
+                value=f"[{user_data['public_repos']}]({user_data['html_url']}?tab=repositories)",
             )
 
             if user_data["type"] == "User":
-                embed.add_field(name="Gists", value=f"[{gists}](https://gist.github.com/{quote(username, safe='')})")
+                embed.add_field(
+                    name="Gists",
+                    value=(
+                        f"[{gists}](https://gist.github.com/{quote(username, safe='')})"
+                    ),
+                )
 
                 embed.add_field(
                     name=f"Organization{'s' if len(orgs)!=1 else ''}",
-                    value=orgs_to_add if orgs else "No organizations."
+                    value=orgs_to_add if orgs else "No organizations.",
                 )
             embed.add_field(name="Website", value=blog)
 
         await ctx.send(embed=embed)
 
-    @github_group.command(name='repository', aliases=('repo',))
+    @github_group.command(name="repository", aliases=("repo",))
     async def github_repo_info(self, ctx: commands.Context, *repo: str) -> None:
         """
         Fetches a repositories' GitHub information.
@@ -325,23 +335,28 @@ class GithubInfo(commands.Cog):
         repo = "/".join(repo)
         if repo.count("/") != 1:
             embed = discord.Embed(
-                title=random.choice(NEGATIVE_REPLIES),
-                description="The repository should look like `user/reponame` or `user reponame`.",
-                colour=Colours.soft_red
+                title="That didn't work!",
+                description=(
+                    "The repository should look like `user/reponame` or `user"
+                    " reponame`."
+                ),
+                colour=Colours.soft_red,
             )
 
             await ctx.send(embed=embed)
             return
 
         async with ctx.typing():
-            repo_data, _ = await self.fetch_data(f"{GITHUB_API_URL}/repos/{quote(repo)}")
+            repo_data, _ = await self.fetch_data(
+                f"{GITHUB_API_URL}/repos/{quote(repo)}"
+            )
 
             # There won't be a message key if this repo exists
             if "message" in repo_data:
                 embed = discord.Embed(
-                    title=random.choice(NEGATIVE_REPLIES),
+                    title="That didn't work!",
                     description="The requested repository was not found.",
-                    colour=Colours.soft_red
+                    colour=Colours.soft_red,
                 )
 
                 await ctx.send(embed=embed)
@@ -351,13 +366,15 @@ class GithubInfo(commands.Cog):
             title=repo_data["name"],
             description=repo_data["description"],
             colour=discord.Colour.og_blurple(),
-            url=repo_data["html_url"]
+            url=repo_data["html_url"],
         )
 
         # If it's a fork, then it will have a parent key
         try:
             parent = repo_data["parent"]
-            embed.description += f"\n\nForked from [{parent['full_name']}]({parent['html_url']})"
+            embed.description += (
+                f"\n\nForked from [{parent['full_name']}]({parent['html_url']})"
+            )
         except KeyError:
             log.debug("Repository is not a fork.")
 
@@ -366,11 +383,15 @@ class GithubInfo(commands.Cog):
         embed.set_author(
             name=repo_owner["login"],
             url=repo_owner["html_url"],
-            icon_url=repo_owner["avatar_url"]
+            icon_url=repo_owner["avatar_url"],
         )
 
-        repo_created_at = datetime.strptime(repo_data["created_at"], "%Y-%m-%dT%H:%M:%SZ").strftime("%d/%m/%Y")
-        last_pushed = datetime.strptime(repo_data["pushed_at"], "%Y-%m-%dT%H:%M:%SZ").strftime("%d/%m/%Y at %H:%M")
+        repo_created_at = datetime.strptime(
+            repo_data["created_at"], "%Y-%m-%dT%H:%M:%SZ"
+        ).strftime("%d/%m/%Y")
+        last_pushed = datetime.strptime(
+            repo_data["pushed_at"], "%Y-%m-%dT%H:%M:%SZ"
+        ).strftime("%d/%m/%Y at %H:%M")
 
         embed.set_footer(
             text=(
